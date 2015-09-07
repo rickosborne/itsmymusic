@@ -1,6 +1,7 @@
 package org.rickosborne.itsmymusic;
 
 import android.os.AsyncTask;
+import android.util.Base64;
 import android.util.Log;
 
 import org.jaudiotagger.audio.AudioFile;
@@ -13,20 +14,29 @@ import org.jaudiotagger.tag.FieldDataInvalidException;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.Tag;
 import org.jaudiotagger.tag.TagException;
-import org.jaudiotagger.tag.TagField;
 import org.jaudiotagger.tag.datatype.Artwork;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 
 public class MusicFixer extends AsyncTask<MusicFixer.Handler, Void, Void> {
   protected final static String LOG_NAME = MusicFixer.class.getSimpleName();
   protected final static String MUSIC_PATH = "/data/data/com.google.android.music/files/music/";
   protected boolean keepGoing = true;
+  protected File cacheDir;
+  protected Collection<File> cachedFiles = new HashSet<File>();
 
   interface Handler {
     void onStart();
@@ -37,12 +47,49 @@ public class MusicFixer extends AsyncTask<MusicFixer.Handler, Void, Void> {
 
   protected Collection<Song> songs;
 
-  public MusicFixer(Collection<Song> songs) {
+  public MusicFixer(Collection<Song> songs, File cacheDir) {
     this.songs = songs;
+    this.cacheDir = cacheDir;
   }
 
   public void stop() {
     keepGoing = false;
+  }
+
+  protected boolean download(URL url, File target) {
+    InputStream in = null;
+    OutputStream out = null;
+    HttpURLConnection http = null;
+    if (target.exists()) return true;
+    try {
+      http = (HttpURLConnection) url.openConnection();
+      http.connect();
+      if (http.getResponseCode() != HttpURLConnection.HTTP_OK) return false;
+      in = http.getInputStream();
+      out = new FileOutputStream(target, false);
+      if (!cachedFiles.contains(target)) cachedFiles.add(target);
+      byte data[] = new byte[4096];
+      int count;
+      while ((count = in.read(data)) > 0) {
+        out.write(data, 0, count);
+      }
+      return true;
+    } catch (IOException e) {
+      e.printStackTrace();
+    } finally {
+      if (in != null) try {
+        in.close();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      if (out != null) try {
+        out.close();
+      } catch (IOException e) {
+        e.printStackTrace();
+      }
+      if (http != null) http.disconnect();
+    }
+    return false;
   }
 
   public void update(Map<String, String> changes, Tag tag, FieldKey key, String value) {
@@ -65,14 +112,52 @@ public class MusicFixer extends AsyncTask<MusicFixer.Handler, Void, Void> {
 
   public void update(Map<String, String> changes, Tag tag, URL value) {
     if (value == null) return;
+    List<Artwork> allArt = tag.getArtworkList();
+    Artwork validArt = null;
+    for (Artwork art : allArt) {
+      if (art != null && !"null".equals(art.getMimeType())) validArt = art;
+    }
+    if (allArt.size() == 1 && validArt != null) return;
+    tag.deleteArtworkField();
+    if (validArt != null) {
+      try {
+        tag.setField(validArt);
+        changes.put("ARTWORK", "existing");
+        return;
+      } catch (FieldDataInvalidException e) {
+        e.printStackTrace();
+      }
+    }
+    if (tag.getFirstArtwork() != null && !tag.getFirstArtwork().getMimeType().equals("null")) return;
+    String cacheName;
+    try {
+      MessageDigest digest = MessageDigest.getInstance("MD5");
+      digest.update(value.toString().getBytes());
+      cacheName = Base64.encodeToString(digest.digest(), Base64.URL_SAFE | Base64.NO_PADDING | Base64.NO_WRAP);
+    } catch (NoSuchAlgorithmException e) {
+      e.printStackTrace();
+      return;
+    }
+    File cacheFile = new File(cacheDir, cacheName);
+    download(value, cacheFile);
+    if (!cacheFile.exists()) return;
     try {
       Artwork artwork = new Artwork();
-      artwork.setImageUrl(value.toString());
-      artwork.setLinked(true);
+      artwork.setFromFile(cacheFile);
+//      artwork.setImageUrl(value.toString());
+//      artwork.setLinked(true);
       tag.setField(artwork);
-//      changes.put("ARTWORK", value.toString());
+      changes.put("ARTWORK", cacheName);
     } catch (FieldDataInvalidException e) {
       e.printStackTrace();
+    } catch (IOException e) {
+      e.printStackTrace();
+    }
+  }
+
+  protected void clearCacheFiles() {
+    for (File file : cachedFiles) {
+      if (file.exists()) file.delete();
     }
   }
 
@@ -137,6 +222,7 @@ public class MusicFixer extends AsyncTask<MusicFixer.Handler, Void, Void> {
     for (Handler handler : handlers) {
       handler.onComplete();
     }
+    clearCacheFiles();
     return null;
   }
 }

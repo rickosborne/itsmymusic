@@ -13,6 +13,7 @@ import android.widget.TableLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
 import java.lang.ref.WeakReference;
 import java.util.Collection;
 import java.util.LinkedList;
@@ -33,8 +34,8 @@ public class MainActivityFragment extends Fragment {
     musicFixer.clear();
   }
 
-  public MusicFixer newFixer(Collection<Song> songs) {
-    MusicFixer fixer = new MusicFixer(songs);
+  public MusicFixer newFixer(Collection<Song> songs, File cacheDir) {
+    MusicFixer fixer = new MusicFixer(songs, cacheDir);
     musicFixer = new WeakReference<MusicFixer>(fixer);
     return fixer;
   }
@@ -78,6 +79,7 @@ public class MainActivityFragment extends Fragment {
     final ProgressBar progressBar = (ProgressBar) view.findViewById(R.id.progressBar);
     final TableLayout songDetails = (TableLayout) view.findViewById(R.id.songDetails);
     final ProgressBar gettingRoot = (ProgressBar) view.findViewById(R.id.gettingRoot);
+
 
     class Helper {
       public void showSong(Song song) {
@@ -180,7 +182,7 @@ public class MainActivityFragment extends Fragment {
     fixMusic.setOnClickListener(new View.OnClickListener() {
       @Override
       public void onClick(View v) {
-        newFixer(songs).execute(new MusicFixer.Handler() {
+        newFixer(songs, getActivity().getExternalCacheDir()).execute(new MusicFixer.Handler() {
           @Override
           public void onStart() {
             Activity activity = getActivity();
